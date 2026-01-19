@@ -1,606 +1,1170 @@
-
-local Config = {
-    WhitelistURL = "https://raw.githubusercontent.com/BAKAVC/Modules/refs/heads/Modules/Config/Whitelist.json",
-    ScannerURL   = "https://raw.githubusercontent.com/BAKAVC/Modules/refs/heads/Modules/FZ_ServerSide",
-    ScriptsURL   = "https://raw.githubusercontent.com/BAKAVC/Modules/refs/heads/Modules/Config/scripts.json",
-    RemoteConfigURL = "https://raw.githubusercontent.com/BAKAVC/Modules/refs/heads/Modules/Config/Config.json"
-}
-
 local TweenService = game:GetService("TweenService")
-local UIS = game:GetService("UserInputService")
+local UserInputService = game:GetService("UserInputService")
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local LogService = game:GetService("LogService")
+local CoreGui = (gethui and gethui()) or game.CoreGui
+
+local function httpGet(url)
+    local methods = {
+        function() return syn and syn.request and syn.request({Url = url, Method = "GET"}).Body end,
+        function() return http_request and http_request({Url = url, Method = "GET"}).Body end,
+        function() return request and request({Url = url, Method = "GET"}).Body end,
+        function() return game:HttpGet(url, true) end
+    }
+    for _, fn in ipairs(methods) do
+        local s, r = pcall(fn)
+        if s and r and #r > 0 then return r end
+    end
+    return nil
+end
+
+local KEYWORDS_URL = "https://raw.githubusercontent.com/BAKAVC/Modules/refs/heads/Modules/Config/keywords.lua"
+
+local keywords = {}
+local builtins = {}
+
+do
+    local response = httpGet(KEYWORDS_URL)
+    if response then
+        local fn = loadstring(response)
+        if fn then
+            local ok, data = pcall(fn)
+            if ok and type(data) == "table" then
+                keywords = data.keywords or {}
+                builtins = data.builtins or {}
+            end
+        end
+    end
+end
+
+local Config = {
+    ScannerURL = "https://raw.githubusercontent.com/BAKAVC/Modules/refs/heads/Modules/FZ_ServerSide",
+    ScriptsURL = "https://raw.githubusercontent.com/BAKAVC/Modules/refs/heads/Modules/Config/scripts.json"
+}
 
 local Connected = false
 local Injecting = false
-local Verifying = false
+local _G_backdoor = nil
+local _G_fireRemote = nil
 
-local function httpGet(url)
-    if syn and syn.request then return syn.request({Url = url, Method = "GET"}).Body
-    elseif http_request then return http_request({Url = url, Method = "GET"}).Body
-    elseif request then return request({Url = url, Method = "GET"}).Body
-    else return HttpService:GetAsync(url) end
+local Settings = {
+    AutoUsername = true
+}
+
+local tweenInfo = TweenInfo.new(0.25, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+
+local function tween(o, p)
+    pcall(function()
+        TweenService:Create(o, tweenInfo, p):Play()
+    end)
 end
 
-local Name = "FZ ServerSide"
-local Version = "Unknown Version"
+local uiState = {scale = 1}
 
-local successFetch, json = pcall(httpGet, Config.RemoteConfigURL)
-if successFetch and json then
-    local ok, data = pcall(HttpService.JSONDecode, HttpService, json)
-    if ok and data then
-        if data.Name then Name = data.Name end
-        if data.Version then Version = data.Version end
-        if data.DiscordLink then Config.DiscordLink = data.DiscordLink end
+local screen = Instance.new("ScreenGui")
+screen.Name = "ModernExecutorUI"
+screen.IgnoreGuiInset = true
+screen.ResetOnSpawn = false
+screen.Parent = CoreGui
+
+local main = Instance.new("Frame", screen)
+main.AnchorPoint = Vector2.new(0.5, 0.5)
+main.Position = UDim2.new(0.5, 0, 0.5, 0)
+main.Size = UDim2.new(0.66, 0, 0.66, 0)
+main.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
+main.BorderSizePixel = 0
+Instance.new("UICorner", main).CornerRadius = UDim.new(0, 16)
+
+local uiScale = Instance.new("UIScale", main)
+uiScale.Scale = uiState.scale
+
+local sidebar = Instance.new("Frame", main)
+sidebar.Size = UDim2.new(0, 56, 1, 0)
+sidebar.BackgroundColor3 = main.BackgroundColor3
+sidebar.BorderSizePixel = 0
+Instance.new("UICorner", sidebar).CornerRadius = UDim.new(0, 16)
+
+local topButtons = Instance.new("Frame", sidebar)
+topButtons.Size = UDim2.new(1, 0, 1, -56)
+topButtons.BackgroundTransparency = 1
+
+local bottomButtons = Instance.new("Frame", sidebar)
+bottomButtons.Size = UDim2.new(1, 0, 0, 56)
+bottomButtons.Position = UDim2.new(0, 0, 1, -56)
+bottomButtons.BackgroundTransparency = 1
+
+Instance.new("UIListLayout", topButtons).HorizontalAlignment = Enum.HorizontalAlignment.Center
+Instance.new("UIListLayout", topButtons).Padding = UDim.new(0, 12)
+
+Instance.new("UIListLayout", bottomButtons).HorizontalAlignment = Enum.HorizontalAlignment.Center
+Instance.new("UIListLayout", bottomButtons).VerticalAlignment = Enum.VerticalAlignment.Center
+
+local content = Instance.new("Folder", main)
+
+local function makeTab(name, keepHeader)
+    local tab = Instance.new("Frame", content)
+    tab.Name = name
+    tab.Position = UDim2.new(0, 56, 0, 0)
+    tab.Size = UDim2.new(1, -56, 1, 0)
+    tab.BackgroundTransparency = 1
+    tab.Visible = false
+
+    if keepHeader then
+        local header = Instance.new("TextLabel", tab)
+        header.Size = UDim2.new(1, -40, 0, 26)
+        header.Position = UDim2.new(0, 20, 0, 10)
+        header.Text = name
+        header.Font = Enum.Font.GothamSemibold
+        header.TextSize = 22
+        header.TextColor3 = Color3.fromRGB(230, 230, 240)
+        header.BackgroundTransparency = 1
+        header.TextXAlignment = Enum.TextXAlignment.Left
+
+        local sub = Instance.new("TextLabel", tab)
+        sub.Size = UDim2.new(1, -40, 0, 16)
+        sub.Position = UDim2.new(0, 20, 0, 38)
+        sub.Text = name == "Players" and "Manage connected players (requires connection for most actions)" or "Settings and customization options"
+        sub.Font = Enum.Font.Gotham
+        sub.TextSize = 13
+        sub.TextColor3 = Color3.fromRGB(180, 180, 200)
+        sub.BackgroundTransparency = 1
+        sub.TextXAlignment = Enum.TextXAlignment.Left
+
+        local div = Instance.new("Frame", tab)
+        div.Size = UDim2.new(1, -40, 0, 1)
+        div.Position = UDim2.new(0, 20, 0, 60)
+        div.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+        div.BorderSizePixel = 0
+    end
+
+    local scroll = Instance.new("ScrollingFrame", tab)
+    scroll.Name = "Body"
+    scroll.Position = UDim2.new(0, 20, 0, 80)
+    scroll.Size = UDim2.new(1, -40, 1, -90)
+    scroll.BackgroundTransparency = 1
+    scroll.ScrollBarThickness = 6
+    scroll.VerticalScrollBarInset = Enum.ScrollBarInset.None
+    scroll.ScrollBarImageTransparency = 1
+    scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+
+    Instance.new("UIListLayout", scroll).SortOrder = Enum.SortOrder.LayoutOrder
+    Instance.new("UIListLayout", scroll).Padding = UDim.new(0, 16)
+
+    return tab, scroll
+end
+
+local tabs = {}
+tabs.Editor, _ = makeTab("Editor", false)
+tabs.Cloud, cloudScroll = makeTab("Cloud", false)
+tabs.Console, consoleScroll = makeTab("Console", false)
+tabs.Settings, settingsScroll = makeTab("Settings", true)
+tabs.Players, playersScroll = makeTab("Players", true)
+
+tabs.Editor.Visible = true
+
+local function createLockOverlay(tab)
+    local overlay = Instance.new("Frame")
+    overlay.Name = "LockOverlay"
+    overlay.Size = UDim2.new(1, 0, 1, 0)
+    overlay.BackgroundColor3 = Color3.fromRGB(10, 10, 15)
+    overlay.BackgroundTransparency = 0.4
+    overlay.Visible = false
+    overlay.ZIndex = 999
+    overlay.Active = true
+    overlay.Selectable = true
+    overlay.Parent = tab
+
+    Instance.new("UICorner", overlay).CornerRadius = UDim.new(0, 16)
+
+    overlay.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            input:StopPropagation()
+        end
+    end)
+
+    local message = Instance.new("TextLabel", overlay)
+    message.Size = UDim2.new(0.8, 0, 0.2, 0)
+    message.Position = UDim2.new(0.1, 0, 0.4, 0)
+    message.BackgroundTransparency = 1
+    message.Text = "This tab is unavailable until connected"
+    message.TextColor3 = Color3.fromRGB(220, 220, 240)
+    message.Font = Enum.Font.GothamBold
+    message.TextSize = 22
+    message.TextWrapped = true
+    message.TextXAlignment = Enum.TextXAlignment.Center
+    message.TextYAlignment = Enum.TextYAlignment.Center
+
+    local sub = Instance.new("TextLabel", overlay)
+    sub.Size = UDim2.new(0.7, 0, 0, 40)
+    sub.Position = UDim2.new(0.15, 0, 0.55, 0)
+    sub.BackgroundTransparency = 1
+    sub.Text = "Click \"Connect\" in the Editor tab to enable remote features"
+    sub.TextColor3 = Color3.fromRGB(160, 160, 190)
+    sub.Font = Enum.Font.Gotham
+    sub.TextSize = 15
+    sub.TextWrapped = true
+    sub.TextXAlignment = Enum.TextXAlignment.Center
+
+    return overlay
+end
+
+local cloudLock   = createLockOverlay(tabs.Cloud)
+local playersLock = createLockOverlay(tabs.Players)
+
+local function setOverlayLocked(overlay, shouldLock)
+    if shouldLock then
+        overlay.Visible = true
+        tween(overlay, {BackgroundTransparency = 0.4})
+    else
+        tween(overlay, {BackgroundTransparency = 1})
+        task.delay(0.35, function()
+            if overlay.BackgroundTransparency > 0.95 then
+                overlay.Visible = false
+            end
+        end)
     end
 end
 
-local GUI = Instance.new("ScreenGui")
-GUI.Parent = game:GetService("CoreGui")
-GUI.IgnoreGuiInset = true
-GUI.ResetOnSpawn = false
-GUI.DisplayOrder = 999
-
-local Menu = Instance.new("Frame")
-Menu.Parent = GUI
-Menu.AnchorPoint = Vector2.new(0.5, 0.5)
-Menu.Position = UDim2.new(0.5, 0, 0.5, 0)
-Menu.Size = UDim2.new(0, 571, 0, 290)
-Menu.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
-local menuCorner = Instance.new("UICorner", Menu)
-menuCorner.CornerRadius = UDim.new(0, 12)
-
-local Header = Instance.new("Frame")
-Header.Parent = Menu
-Header.Size = UDim2.new(1, 0, 0, 35)
-Header.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
-local headerCorner = Instance.new("UICorner", Header)
-headerCorner.CornerRadius = UDim.new(0, 12)
-
-local TitleLabel = Instance.new("TextLabel")
-TitleLabel.Parent = Header
-TitleLabel.Position = UDim2.new(0, 12, 0, 4)
-TitleLabel.Size = UDim2.new(0, 400, 0, 20)
-TitleLabel.BackgroundTransparency = 1
-TitleLabel.Text = Name
-TitleLabel.TextColor3 = Color3.fromRGB(230, 230, 230)
-TitleLabel.Font = Enum.Font.GothamBold
-TitleLabel.TextSize = 19
-TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
-
-local VersionLabel = Instance.new("TextLabel")
-VersionLabel.Parent = Header
-VersionLabel.Position = UDim2.new(0, 12, 0, 24)
-VersionLabel.Size = UDim2.new(0, 400, 0, 14)
-VersionLabel.BackgroundTransparency = 1
-VersionLabel.Text = Version
-VersionLabel.TextColor3 = Color3.fromRGB(160, 160, 160)
-VersionLabel.Font = Enum.Font.Gotham
-VersionLabel.TextSize = 12
-VersionLabel.TextXAlignment = Enum.TextXAlignment.Left
-
-local bar = Instance.new("Frame")
-bar.Parent = Header
-bar.Size = UDim2.new(0, 26, 0, 3)
-bar.Position = UDim2.new(0, 476 + 11 - 13, 0, 32)
-bar.BackgroundColor3 = Color3.fromRGB(200, 200, 200)
-bar.Visible = false
-local barCorner = Instance.new("UICorner", bar)
-
-local function createIcon(id, x)
-    local b = Instance.new("ImageButton")
-    b.Parent = Header
-    b.Position = UDim2.new(0, x, 0, 8)
-    b.Size = UDim2.new(0, 22, 0, 22)
-    b.BackgroundTransparency = 1
-    b.Image = "rbxassetid://" .. id
-    b.ImageColor3 = Color3.fromRGB(120, 120, 120)
-    b.Visible = false
-    return b
+local function updateTabLocks()
+    local shouldLock = not Connected
+    if tabs.Cloud.Visible then
+        setOverlayLocked(cloudLock, shouldLock)
+    end
+    if tabs.Players.Visible then
+        setOverlayLocked(playersLock, shouldLock)
+    end
 end
 
-local CONSOLE_ICON = createIcon("7743872929", 476)
-local EXEC_ICON = createIcon("11570895459", 508)
-local CLOUD_ICON = createIcon("6031075938", 540)
+for _, tab in pairs(tabs) do
+    tab:GetPropertyChangedSignal("Visible"):Connect(updateTabLocks)
+end
 
-local Tabs = Instance.new("Frame")
-Tabs.Parent = Menu
-Tabs.Position = UDim2.new(0, 0, 0, 35)
-Tabs.Size = UDim2.new(1, 0, 1, -35)
-Tabs.BackgroundTransparency = 1
-Tabs.ClipsDescendants = true
+updateTabLocks()
 
-local LoginTab = Instance.new("Frame")
-LoginTab.Parent = Tabs
-LoginTab.Size = UDim2.new(1, 0, 1, 0)
-LoginTab.BackgroundTransparency = 1
-LoginTab.Visible = true
+local playerListFrame = Instance.new("ScrollingFrame", playersScroll)
+playerListFrame.Size = UDim2.new(1, 0, 1, 0)
+playerListFrame.BackgroundTransparency = 1
+playerListFrame.ScrollBarThickness = 4
+playerListFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
 
-local InfoTitle = Instance.new("TextLabel")
-InfoTitle.Parent = LoginTab
-InfoTitle.Position = UDim2.new(0, 20, 0, 10)
-InfoTitle.Size = UDim2.new(0, 260, 0, 30)
-InfoTitle.BackgroundTransparency = 1
-InfoTitle.Text = "How to get whitelisted"
-InfoTitle.TextColor3 = Color3.fromRGB(230, 230, 230)
-InfoTitle.Font = Enum.Font.GothamBold
-InfoTitle.TextSize = 18
-InfoTitle.TextXAlignment = Enum.TextXAlignment.Left
+local playerLayout = Instance.new("UIListLayout", playerListFrame)
+playerLayout.Padding = UDim.new(0, 10)
+playerLayout.SortOrder = Enum.SortOrder.LayoutOrder
 
-local InfoText = Instance.new("TextLabel")
-InfoText.Parent = LoginTab
-InfoText.Position = UDim2.new(0, 20, 0, 50)
-InfoText.Size = UDim2.new(0, 260, 0, 140)
-InfoText.BackgroundTransparency = 1
-InfoText.Text = [[To use FZ ServerSide, you need a whitelist key.
+local playerEntries = {}
+local freezeStates = {}
 
-Steps:
-1. Join our Discord server
-2. Go to the #shop channel
-3. Purchase a key or follow the instructions]]
-InfoText.TextColor3 = Color3.fromRGB(180, 180, 180)
-InfoText.Font = Enum.Font.Gotham
-InfoText.TextSize = 15
-InfoText.TextXAlignment = Enum.TextXAlignment.Left
-InfoText.TextYAlignment = Enum.TextYAlignment.Top
-InfoText.TextWrapped = true
+local function createPlayerEntry(player)
+    local entry = Instance.new("Frame")
+    entry.Size = UDim2.new(1, 0, 0, 54)
+    entry.BackgroundColor3 = Color3.fromRGB(32, 32, 42)
+    entry.BorderSizePixel = 0
+    entry.ClipsDescendants = true
+    Instance.new("UICorner", entry).CornerRadius = UDim.new(0, 10)
 
-local DiscordBtn = Instance.new("TextButton")
-DiscordBtn.Parent = LoginTab
-DiscordBtn.Position = UDim2.new(0, 20, 1, -50)
-DiscordBtn.Size = UDim2.new(0, 260, 0, 36)
-DiscordBtn.BackgroundTransparency = 1
-DiscordBtn.Text = "Copy Discord Invite"
-DiscordBtn.TextColor3 = Color3.fromRGB(88, 101, 242)
-DiscordBtn.Font = Enum.Font.GothamBold
-DiscordBtn.TextSize = 16
-DiscordBtn.TextXAlignment = Enum.TextXAlignment.Left
+    local stroke = Instance.new("UIStroke", entry)
+    stroke.Color = Color3.fromRGB(80, 80, 100)
+    stroke.Transparency = 0.6
+    stroke.Thickness = 1
+    stroke.Enabled = false
 
-local discordScale = Instance.new("UIScale", DiscordBtn)
-discordScale.Scale = 1
-DiscordBtn.MouseButton1Down:Connect(function() TweenService:Create(discordScale, TweenInfo.new(0.1), {Scale = 1.08}):Play() end)
-DiscordBtn.MouseButton1Up:Connect(function() TweenService:Create(discordScale, TweenInfo.new(0.1), {Scale = 1}):Play() end)
-
-local isValidDiscordLink = Config.DiscordLink and string.match(Config.DiscordLink, "^https://discord%.gg/[%w-]+$") ~= nil
-if isValidDiscordLink then
-    DiscordBtn.MouseButton1Click:Connect(function()
-        if setclipboard then setclipboard(Config.DiscordLink) end
-        DiscordBtn.Text = "Copied"
-        task.wait(1.5)
-        DiscordBtn.Text = "Copy Discord Invite"
+    entry.MouseEnter:Connect(function()
+        tween(stroke, {Transparency = 0.3})
+        tween(entry, {BackgroundColor3 = Color3.fromRGB(38, 38, 50)})
     end)
-else
-    DiscordBtn.Text = "No Invite Available"
-    DiscordBtn.TextColor3 = Color3.fromRGB(180, 80, 80)
-    DiscordBtn.MouseButton1Click:Connect(function()
-        DiscordBtn.Text = "Link not set"
-        task.wait(1.5)
-        DiscordBtn.Text = "No Invite Available"
+    entry.MouseLeave:Connect(function()
+        tween(stroke, {Transparency = 0.6})
+        tween(entry, {BackgroundColor3 = Color3.fromRGB(32, 32, 42)})
     end)
+
+    local topSection = Instance.new("Frame", entry)
+    topSection.Size = UDim2.new(1, 0, 1, 0)
+    topSection.BackgroundTransparency = 1
+
+    local avatar = Instance.new("ImageLabel", topSection)
+    avatar.Size = UDim2.new(0, 42, 0, 42)
+    avatar.Position = UDim2.new(0, 12, 0.5, -21)
+    avatar.BackgroundTransparency = 1
+    pcall(function()
+        avatar.Image = Players:GetUserThumbnailAsync(player.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size48x48)
+    end)
+    Instance.new("UICorner", avatar).CornerRadius = UDim.new(1, 0)
+
+    local name = Instance.new("TextLabel", topSection)
+    name.Size = UDim2.new(1, -110, 0, 20)
+    name.Position = UDim2.new(0, 66, 0, 8)
+    name.BackgroundTransparency = 1
+    name.Text = player.Name .. (player == Players.LocalPlayer and " (You)" or "")
+    name.TextColor3 = Color3.fromRGB(225, 225, 235)
+    name.Font = Enum.Font.GothamSemibold
+    name.TextSize = 15
+    name.TextXAlignment = Enum.TextXAlignment.Left
+    name.TextTruncate = Enum.TextTruncate.AtEnd
+
+    local id = Instance.new("TextLabel", topSection)
+    id.Size = UDim2.new(1, -110, 0, 16)
+    id.Position = UDim2.new(0, 66, 0, 30)
+    id.BackgroundTransparency = 1
+    id.Text = "ID: " .. player.UserId
+    id.TextColor3 = Color3.fromRGB(170, 170, 190)
+    id.Font = Enum.Font.Gotham
+    id.TextSize = 12
+    id.TextXAlignment = Enum.TextXAlignment.Left
+
+    local arrowBtn = Instance.new("TextButton", topSection)
+    arrowBtn.Size = UDim2.new(0, 28, 0, 28)
+    arrowBtn.Position = UDim2.new(1, -38, 0.5, -14)
+    arrowBtn.BackgroundTransparency = 1
+    arrowBtn.Text = "▼"
+    arrowBtn.TextColor3 = Color3.fromRGB(190, 190, 210)
+    arrowBtn.Font = Enum.Font.GothamBold
+    arrowBtn.TextSize = 16
+
+    local buttonsSection = Instance.new("Frame", entry)
+    buttonsSection.Size = UDim2.new(1, 0, 0, 44)
+    buttonsSection.Position = UDim2.new(0, 0, 0, 54)
+    buttonsSection.BackgroundTransparency = 1
+    buttonsSection.Visible = false
+
+    local rowLayout = Instance.new("UIListLayout", buttonsSection)
+    rowLayout.FillDirection = Enum.FillDirection.Horizontal
+    rowLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    rowLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+    rowLayout.Padding = UDim.new(0, 12)
+
+    local expanded = false
+
+    arrowBtn.MouseButton1Click:Connect(function()
+        expanded = not expanded
+        arrowBtn.Text = expanded and "▲" or "▼"
+        if expanded then
+            buttonsSection.Visible = true
+            tween(entry, {Size = UDim2.new(1, 0, 0, 98)})
+        else
+            local tweenComp = tween(entry, {Size = UDim2.new(1, 0, 0, 54)})
+            tweenComp.Completed:Connect(function()
+                buttonsSection.Visible = false
+            end)
+        end
+    end)
+
+    local isFrozen = freezeStates[player.UserId] or false
+    local freezeBtn
+
+    local function updateFreezeButton()
+        if freezeBtn then
+            freezeBtn.Text = isFrozen and "Unfreeze" or "Freeze"
+            freezeBtn.TextColor3 = isFrozen and Color3.fromRGB(255, 140, 140) or Color3.fromRGB(190, 190, 210)
+        end
+    end
+
+    local function toggleFreeze()
+        if not Connected or not _G_backdoor or not _G_fireRemote then return end
+
+        isFrozen = not isFrozen
+        freezeStates[player.UserId] = isFrozen
+
+        local safeName = player.Name:gsub('"', '\\"')
+
+        if isFrozen then
+            pcall(_G.fireRemote, _G.backdoor,
+                'local p = game.Players["'..safeName..'"]; if p and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then p.Character.HumanoidRootPart.Anchored = true end')
+        else
+            pcall(_G.fireRemote, _G.backdoor,
+                'local p = game.Players["'..safeName..'"]; if p and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then p.Character.HumanoidRootPart.Anchored = false; if p.Character:FindFirstChild("Humanoid") then p.Character.Humanoid.WalkSpeed = 16; p.Character.Humanoid.JumpPower = 50 end end')
+        end
+
+        updateFreezeButton()
+    end
+
+    local function addActionButton(text, callback, baseColor)
+        local btn = Instance.new("TextButton", buttonsSection)
+        btn.Size = UDim2.new(0, 84, 0, 34)
+        btn.BackgroundTransparency = 1
+        btn.BorderSizePixel = 1
+        btn.BorderColor3 = Color3.fromRGB(75, 75, 90)
+        btn.Text = text
+        btn.Font = Enum.Font.GothamSemibold
+        btn.TextSize = 13
+        btn.TextColor3 = baseColor or Color3.fromRGB(190, 190, 210)
+        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+
+        local origSize = btn.Size
+        local origColor = btn.TextColor3
+
+        btn.MouseEnter:Connect(function()
+            tween(btn, {Size = UDim2.new(origSize.X.Scale, origSize.X.Offset + 4, origSize.Y.Scale, origSize.Y.Offset + 4)})
+            tween(btn, {TextColor3 = Color3.fromRGB(245, 245, 255)})
+        end)
+
+        btn.MouseLeave:Connect(function()
+            tween(btn, {Size = origSize})
+            tween(btn, {TextColor3 = origColor})
+        end)
+
+        btn.MouseButton1Down:Connect(function()
+            tween(btn, {Size = UDim2.new(origSize.X.Scale, origSize.X.Offset + 8, origSize.Y.Scale, origSize.Y.Offset + 8)})
+        end)
+
+        btn.MouseButton1Up:Connect(function()
+            tween(btn, {Size = UDim2.new(origSize.X.Scale, origSize.X.Offset + 4, origSize.Y.Scale, origSize.Y.Offset + 4)})
+        end)
+
+        btn.MouseButton1Click:Connect(callback)
+    end
+
+    addActionButton("Kick", function()
+        if Connected and _G.backdoor and _G.fireRemote then
+            local safeName = player.Name:gsub('"', '\\"')
+            pcall(_G.fireRemote, _G.backdoor, 'game.Players["'..safeName..'"]:Kick("Kicked via FZ")')
+        end
+    end)
+
+    addActionButton("Ban", function()
+        if Connected and _G.backdoor and _G.fireRemote then
+            local safeName = player.Name:gsub('"', '\\"')
+            pcall(_G.fireRemote, _G.backdoor, 'game.Players["'..safeName..'"]:Kick("Banned - Permanent")')
+        end
+    end, Color3.fromRGB(220, 80, 80))
+
+    addActionButton("Freeze", toggleFreeze)
+    for _, btn in ipairs(buttonsSection:GetChildren()) do
+        if btn:IsA("TextButton") and (btn.Text == "Freeze" or btn.Text == "Unfreeze") then
+            freezeBtn = btn
+            updateFreezeButton()
+            break
+        end
+    end
+
+    entry.Parent = playerListFrame
+    return entry
 end
 
-local RightPanel = Instance.new("Frame")
-RightPanel.Parent = LoginTab
-RightPanel.Size = UDim2.new(0, 280, 0, 200)
-RightPanel.Position = UDim2.new(1, -300, 0.5, -100)
-RightPanel.BackgroundTransparency = 1
+local function updatePlayerList()
+    for _, e in ipairs(playerEntries) do
+        if e and e.Parent then e:Destroy() end
+    end
+    playerEntries = {}
 
-local LoginTitle = Instance.new("TextLabel")
-LoginTitle.Parent = RightPanel
-LoginTitle.Size = UDim2.new(1, 0, 0, 40)
-LoginTitle.BackgroundTransparency = 1
-LoginTitle.Text = "Enter Whitelist Key"
-LoginTitle.TextColor3 = Color3.fromRGB(230, 230, 230)
-LoginTitle.Font = Enum.Font.GothamBold
-LoginTitle.TextSize = 20
-LoginTitle.TextXAlignment = Enum.TextXAlignment.Center
-
-local KeyBox = Instance.new("TextBox")
-KeyBox.Parent = RightPanel
-KeyBox.Position = UDim2.new(0.5, 0, 0, 60)
-KeyBox.AnchorPoint = Vector2.new(0.5, 0)
-KeyBox.Size = UDim2.new(1, -20, 0, 40)
-KeyBox.BackgroundTransparency = 1
-KeyBox.PlaceholderText = "Enter key..."
-KeyBox.PlaceholderColor3 = Color3.fromRGB(120, 120, 120)
-KeyBox.Text = ""
-KeyBox.TextColor3 = Color3.fromRGB(230, 230, 230)
-KeyBox.Font = Enum.Font.Gotham
-KeyBox.TextSize = 18
-KeyBox.ClearTextOnFocus = false
-
-local Underline = Instance.new("Frame")
-Underline.Parent = KeyBox
-Underline.Size = UDim2.new(1, 0, 0, 2)
-Underline.Position = UDim2.new(0, 0, 1, 0)
-Underline.BackgroundColor3 = Color3.fromRGB(80, 80, 80)
-Underline.BorderSizePixel = 0
-
-local VerifyBtn = Instance.new("TextButton")
-VerifyBtn.Parent = RightPanel
-VerifyBtn.Position = UDim2.new(0.5, 0, 0, 110)
-VerifyBtn.AnchorPoint = Vector2.new(0.5, 0)
-VerifyBtn.Size = UDim2.new(1, -20, 0, 40)
-VerifyBtn.BackgroundTransparency = 1
-VerifyBtn.Text = "Verify"
-VerifyBtn.TextColor3 = Color3.fromRGB(120, 220, 160)
-VerifyBtn.Font = Enum.Font.GothamBold
-VerifyBtn.TextSize = 20
-
-local verifyScale = Instance.new("UIScale", VerifyBtn)
-verifyScale.Scale = 1
-VerifyBtn.MouseButton1Down:Connect(function() TweenService:Create(verifyScale, TweenInfo.new(0.1), {Scale = 1.1}):Play() end)
-VerifyBtn.MouseButton1Up:Connect(function() TweenService:Create(verifyScale, TweenInfo.new(0.1), {Scale = 1}):Play() end)
-
-local StatusLabel = Instance.new("TextLabel")
-StatusLabel.Parent = RightPanel
-StatusLabel.Position = UDim2.new(0.5, 0, 0, 160)
-StatusLabel.AnchorPoint = Vector2.new(0.5, 0)
-StatusLabel.Size = UDim2.new(1, -20, 0, 20)
-StatusLabel.BackgroundTransparency = 1
-StatusLabel.Text = ""
-StatusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
-StatusLabel.Font = Enum.Font.Gotham
-StatusLabel.TextSize = 14
-StatusLabel.TextXAlignment = Enum.TextXAlignment.Center
-
-local ConsoleTab = Instance.new("Frame")
-ConsoleTab.Parent = Tabs
-ConsoleTab.Size = UDim2.new(1, 0, 1, 0)
-ConsoleTab.BackgroundTransparency = 1
-ConsoleTab.Visible = false
-
-local ETab = Instance.new("Frame")
-ETab.Parent = Tabs
-ETab.Size = UDim2.new(1, 0, 1, 0)
-ETab.BackgroundTransparency = 1
-ETab.Visible = false
-
-local CTab = Instance.new("Frame")
-CTab.Parent = Tabs
-CTab.Size = UDim2.new(1, 0, 1, 0)
-CTab.BackgroundTransparency = 1
-CTab.Visible = false
-
-local function switch(tab, icon)
-    ConsoleTab.Visible = false
-    ETab.Visible = false
-    CTab.Visible = false
-    tab.Visible = true
-    CONSOLE_ICON.ImageColor3 = Color3.fromRGB(120, 120, 120)
-    EXEC_ICON.ImageColor3 = Color3.fromRGB(120, 120, 120)
-    CLOUD_ICON.ImageColor3 = Color3.fromRGB(120, 120, 120)
-    icon.ImageColor3 = Color3.fromRGB(230, 230, 230)
-    local targetX = icon.Position.X.Offset + 11
-    TweenService:Create(bar, TweenInfo.new(0.25), {Position = UDim2.new(0, targetX - 13, 0, 32)}):Play()
-end
-
-local function addStyle(button)
-    button.BackgroundTransparency = 1
-    button.AutoButtonColor = false
-    local scale = Instance.new("UIScale", button)
-    scale.Scale = 1
-    button.MouseButton1Down:Connect(function() TweenService:Create(scale, TweenInfo.new(0.1), {Scale = 1.08}):Play() end)
-    button.MouseButton1Up:Connect(function() TweenService:Create(scale, TweenInfo.new(0.1), {Scale = 1}):Play() end)
-    button.MouseLeave:Connect(function() TweenService:Create(scale, TweenInfo.new(0.1), {Scale = 1}):Play() end)
-end
-
-local ConsoleScroll = Instance.new("ScrollingFrame")
-ConsoleScroll.Parent = ConsoleTab
-ConsoleScroll.Position = UDim2.new(0, 12, 0, 10)
-ConsoleScroll.Size = UDim2.new(1, -24, 1, -55)
-ConsoleScroll.BackgroundTransparency = 1
-ConsoleScroll.ScrollBarThickness = 0
-ConsoleScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
-
-local ConsoleLayout = Instance.new("UIListLayout", ConsoleScroll)
-ConsoleLayout.Padding = UDim.new(0, 4)
-
-local function getTimeStamp()
-    local t = os.date("*t")
-    return string.format("[%02d:%02d:%02d]", t.hour, t.min, t.sec)
-end
-
-local function addConsoleLine(text, color)
-    local line = Instance.new("TextLabel")
-    line.Parent = ConsoleScroll
-    line.Size = UDim2.new(1, -10, 0, 20)
-    line.BackgroundTransparency = 1
-    line.Text = getTimeStamp() .. " " .. text
-    line.TextColor3 = color or Color3.fromRGB(220, 220, 220)
-    line.Font = Enum.Font.Code
-    line.TextSize = 14
-    line.TextXAlignment = Enum.TextXAlignment.Left
-    line.TextWrapped = true
+    for _, plr in ipairs(Players:GetPlayers()) do
+        table.insert(playerEntries, createPlayerEntry(plr))
+    end
 
     task.defer(function()
-        ConsoleScroll.CanvasPosition = Vector2.new(0, ConsoleScroll.AbsoluteCanvasSize.Y)
+        playerListFrame.CanvasSize = UDim2.new(0, 0, 0, playerLayout.AbsoluteContentSize.Y + 20)
     end)
 end
 
-local ClearConsoleBtn = Instance.new("TextButton")
-ClearConsoleBtn.Parent = ConsoleTab
-ClearConsoleBtn.Position = UDim2.new(1, -100, 1, -32)
-ClearConsoleBtn.Size = UDim2.new(0, 90, 0, 26)
-ClearConsoleBtn.Text = "Clear"
-ClearConsoleBtn.TextColor3 = Color3.fromRGB(230, 230, 230)
-ClearConsoleBtn.Font = Enum.Font.GothamBold
-ClearConsoleBtn.TextSize = 14
-ClearConsoleBtn.BackgroundTransparency = 1
-addStyle(ClearConsoleBtn)
+Players.PlayerAdded:Connect(updatePlayerList)
+Players.PlayerRemoving:Connect(updatePlayerList)
 
-ClearConsoleBtn.MouseButton1Click:Connect(function()
-    for _, c in ConsoleScroll:GetChildren() do
-        if c:IsA("TextLabel") then c:Destroy() end
+local lastUpdate = 0
+local UPDATE_COOLDOWN = 0.4
+
+tabs.Players:GetPropertyChangedSignal("Visible"):Connect(function()
+    if tabs.Players.Visible then
+        local now = tick()
+        if now - lastUpdate < UPDATE_COOLDOWN then return end
+        lastUpdate = now
+        updatePlayerList()
     end
-    addConsoleLine("Console cleared.", Color3.fromRGB(120, 220, 160))
 end)
 
-LogService.MessageOut:Connect(function(message, messageType)
-    local formatted = message
-    local color = Color3.fromRGB(220, 220, 220)
-    if messageType == Enum.MessageType.MessageWarning then
-        formatted = "[WARN] " .. message
-        color = Color3.fromRGB(255, 200, 0)
-    elseif messageType == Enum.MessageType.MessageError then
-        formatted = "[ERROR] " .. message
-        color = Color3.fromRGB(255, 80, 80)
-    end
-    addConsoleLine(formatted, color)
-end)
+if tabs.Players.Visible then updatePlayerList() end
 
-addConsoleLine("Console ready – output will appear here.", Color3.fromRGB(120, 220, 160))
-
-local EditorScroll = Instance.new("ScrollingFrame")
-EditorScroll.Parent = ETab
-EditorScroll.Position = UDim2.new(0, 12, 0, 10)
-EditorScroll.Size = UDim2.new(1, -24, 1, -55)
-EditorScroll.BackgroundTransparency = 1
-EditorScroll.ScrollBarThickness = 0
-EditorScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
-
-local LinesLabel = Instance.new("TextLabel")
-LinesLabel.Parent = EditorScroll
-LinesLabel.Size = UDim2.new(0, 40, 1, 0)
-LinesLabel.BackgroundTransparency = 1
-LinesLabel.TextXAlignment = Enum.TextXAlignment.Right
-LinesLabel.TextYAlignment = Enum.TextYAlignment.Top
-LinesLabel.Font = Enum.Font.Code
-LinesLabel.TextSize = 14
-LinesLabel.TextColor3 = Color3.fromRGB(110, 110, 110)
-LinesLabel.Text = "1\n"
-
-local Editor = Instance.new("TextBox")
-Editor.Parent = EditorScroll
-Editor.Position = UDim2.new(0, 46, 0, 0)
-Editor.Size = UDim2.new(1, -46, 1, 0)
-Editor.BackgroundTransparency = 1
-Editor.MultiLine = true
-Editor.ClearTextOnFocus = false
-Editor.TextWrapped = false
-Editor.TextXAlignment = Enum.TextXAlignment.Left
-Editor.TextYAlignment = Enum.TextYAlignment.Top
-Editor.Font = Enum.Font.Code
-Editor.TextSize = 14
-Editor.TextColor3 = Color3.fromRGB(220, 220, 220)
-Editor.PlaceholderText = "-- paste or load script here"
-Editor.Text = ""
-
-local function updateLines()
-    local lines = 1
-    for _ in Editor.Text:gmatch("\n") do lines += 1 end
-    local txt = ""
-    for i = 1, lines do txt = txt .. i .. "\n" end
-    LinesLabel.Text = txt
+local function applyUI()
+    uiScale.Scale = uiState.scale
 end
-Editor:GetPropertyChangedSignal("Text"):Connect(updateLines)
-Editor.FocusLost:Connect(function(enter) if enter then updateLines() end end)
-Editor.Changed:Connect(function(p) if p == "TextBounds" or p == "AbsoluteSize" then updateLines() end end)
-updateLines()
 
-local ExecuteBtn = Instance.new("TextButton")
-ExecuteBtn.Parent = ETab
-ExecuteBtn.Position = UDim2.new(1, -280, 1, -32)
-ExecuteBtn.Size = UDim2.new(0, 75, 0, 26)
-ExecuteBtn.Text = "Execute"
-ExecuteBtn.TextColor3 = Color3.fromRGB(230, 230, 230)
-ExecuteBtn.Font = Enum.Font.GothamBold
-ExecuteBtn.TextSize = 14
-ExecuteBtn.BackgroundTransparency = 1
-addStyle(ExecuteBtn)
+local function createToggle(parent, title, desc, initialState, callback)
+    local block = Instance.new("Frame")
+    block.Size = UDim2.new(1, 0, 0, 70)
+    block.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
+    block.Parent = parent
+    Instance.new("UICorner", block).CornerRadius = UDim.new(0, 12)
 
-local ClearBtn = Instance.new("TextButton")
-ClearBtn.Parent = ETab
-ClearBtn.Position = UDim2.new(1, -195, 1, -32)
-ClearBtn.Size = UDim2.new(0, 75, 0, 26)
-ClearBtn.Text = "Clear"
-ClearBtn.TextColor3 = Color3.fromRGB(230, 230, 230)
-ClearBtn.Font = Enum.Font.GothamBold
-ClearBtn.TextSize = 14
-ClearBtn.BackgroundTransparency = 1
-addStyle(ClearBtn)
+    local titleLbl = Instance.new("TextLabel", block)
+    titleLbl.Size = UDim2.new(0.6, 0, 0, 20)
+    titleLbl.Position = UDim2.new(0, 16, 0, 12)
+    titleLbl.BackgroundTransparency = 1
+    titleLbl.Text = title
+    titleLbl.TextColor3 = Color3.fromRGB(220, 220, 230)
+    titleLbl.Font = Enum.Font.GothamSemibold
+    titleLbl.TextSize = 15
+    titleLbl.TextXAlignment = Enum.TextXAlignment.Left
 
-local ConnectBtn = Instance.new("TextButton")
-ConnectBtn.Parent = ETab
-ConnectBtn.Position = UDim2.new(1, -100, 1, -32)
-ConnectBtn.Size = UDim2.new(0, 90, 0, 26)
-ConnectBtn.Text = "Connect"
-ConnectBtn.TextColor3 = Color3.fromRGB(230, 230, 230)
-ConnectBtn.Font = Enum.Font.GothamBold
-ConnectBtn.TextSize = 14
-ConnectBtn.BackgroundTransparency = 1
-addStyle(ConnectBtn)
+    local descLbl = Instance.new("TextLabel", block)
+    descLbl.Size = UDim2.new(0.6, 0, 0, 16)
+    descLbl.Position = UDim2.new(0, 16, 0, 34)
+    descLbl.BackgroundTransparency = 1
+    descLbl.Text = desc
+    descLbl.TextColor3 = Color3.fromRGB(160, 160, 180)
+    descLbl.Font = Enum.Font.Gotham
+    descLbl.TextSize = 12
+    descLbl.TextXAlignment = Enum.TextXAlignment.Left
 
-local Status = Instance.new("TextLabel")
-Status.Parent = ETab
-Status.Position = UDim2.new(0, 15, 1, -32)
-Status.Size = UDim2.new(0, 300, 0, 26)
-Status.BackgroundTransparency = 1
-Status.Text = "● Not Connected"
-Status.TextColor3 = Color3.fromRGB(180, 80, 80)
-Status.Font = Enum.Font.Gotham
-Status.TextSize = 14
-Status.TextXAlignment = Enum.TextXAlignment.Left
+    local switchBg = Instance.new("Frame", block)
+    switchBg.Size = UDim2.new(0, 52, 0, 28)
+    switchBg.Position = UDim2.new(1, -68, 0.5, -14)
+    switchBg.BackgroundColor3 = initialState and Color3.fromRGB(60, 180, 90) or Color3.fromRGB(70, 70, 80)
+    switchBg.BorderSizePixel = 0
+    Instance.new("UICorner", switchBg).CornerRadius = UDim.new(1, 0)
 
-local LibraryContainer = Instance.new("Frame")
-LibraryContainer.Parent = CTab
-LibraryContainer.Position = UDim2.new(0, 12, 0, 10)
-LibraryContainer.Size = UDim2.new(1, -24, 1, -70)
-LibraryContainer.BackgroundTransparency = 1
+    local knob = Instance.new("Frame", switchBg)
+    knob.Size = UDim2.new(0, 24, 0, 24)
+    knob.Position = initialState and UDim2.new(0, 26, 0, 2) or UDim2.new(0, 2, 0, 2)
+    knob.BackgroundColor3 = Color3.new(1,1,1)
+    knob.BorderSizePixel = 0
+    Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
 
-local LibraryScroll = Instance.new("ScrollingFrame")
-LibraryScroll.Parent = LibraryContainer
-LibraryScroll.Size = UDim2.new(1, 0, 1, 0)
-LibraryScroll.BackgroundTransparency = 1
-LibraryScroll.ScrollBarThickness = 0
-LibraryScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    local shadow = Instance.new("UIStroke", knob)
+    shadow.Transparency = 0.6
+    shadow.Color = Color3.new(0,0,0)
 
-local Layout = Instance.new("UIListLayout", LibraryScroll)
-Layout.Padding = UDim.new(0, 8)
+    local function toggle()
+        local enabled = not initialState
+        initialState = enabled
+        tween(switchBg, {BackgroundColor3 = enabled and Color3.fromRGB(60, 180, 90) or Color3.fromRGB(70, 70, 80)})
+        tween(knob, {Position = enabled and UDim2.new(0, 26, 0, 2) or UDim2.new(0, 2, 0, 2)})
+        callback(enabled)
+    end
 
-local LibraryStatus = Instance.new("TextLabel")
-LibraryStatus.Parent = CTab
-LibraryStatus.Position = UDim2.new(0.5, 0, 0.5, 0)
-LibraryStatus.AnchorPoint = Vector2.new(0.5, 0.5)
-LibraryStatus.Size = UDim2.new(1, -24, 0, 30)
-LibraryStatus.BackgroundTransparency = 1
-LibraryStatus.Text = "Loading library..."
-LibraryStatus.TextColor3 = Color3.fromRGB(220, 170, 80)
-LibraryStatus.Font = Enum.Font.Gotham
-LibraryStatus.TextSize = 16
+    switchBg.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            toggle()
+        end
+    end)
 
-local LibBottomBar = Instance.new("Frame")
-LibBottomBar.Parent = CTab
-LibBottomBar.Position = UDim2.new(0, 12, 1, -55)
-LibBottomBar.Size = UDim2.new(1, -24, 0, 40)
-LibBottomBar.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
-LibBottomBar.BackgroundTransparency = 0.4
-LibBottomBar.BorderSizePixel = 0
-local libCorner = Instance.new("UICorner", LibBottomBar)
-libCorner.CornerRadius = UDim.new(0, 8)
+    return block
+end
 
-local R6Btn = Instance.new("TextButton")
-R6Btn.Parent = LibBottomBar
-R6Btn.Position = UDim2.new(0, 8, 0.5, -13)
-R6Btn.Size = UDim2.new(0, 60, 0, 26)
-R6Btn.Text = "R6"
-R6Btn.BackgroundColor3 = Color3.fromRGB(30, 60, 100)
-R6Btn.TextColor3 = Color3.fromRGB(230, 230, 230)
-R6Btn.Font = Enum.Font.GothamBold
-R6Btn.TextSize = 13
-local r6Corner = Instance.new("UICorner", R6Btn)
-r6Corner.CornerRadius = UDim.new(0, 6)
-addStyle(R6Btn)
+createToggle(settingsScroll, "Auto Username", "Auto replace username in cloud scripts", Settings.AutoUsername, function(enabled)
+    Settings.AutoUsername = enabled
+end)
 
-local r6FeedbackActive = false
-R6Btn.MouseButton1Click:Connect(function()
-    if not Connected or not _G.backdoor or not _G.fireRemote then
-        if r6FeedbackActive then return end
-        r6FeedbackActive = true
-        local origColor = R6Btn.BackgroundColor3
-        local origText = R6Btn.Text
-        R6Btn.BackgroundColor3 = Color3.fromRGB(180, 60, 60)
-        R6Btn.Text = "Connect First"
-        task.delay(0.8, function()
-            if R6Btn then
-                R6Btn.BackgroundColor3 = origColor
-                R6Btn.Text = origText
+local function settingBlock(title, desc, onSlide, minVal, maxVal, init)
+    local block = Instance.new("Frame", tabs.Settings.Body)
+    block.Size = UDim2.new(1, 0, 0, 90)
+    block.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
+    Instance.new("UICorner", block).CornerRadius = UDim.new(0, 14)
+
+    local titleLbl = Instance.new("TextLabel", block)
+    titleLbl.Position = UDim2.new(0, 16, 0, 10)
+    titleLbl.Size = UDim2.new(1, -32, 0, 18)
+    titleLbl.Text = title
+    titleLbl.Font = Enum.Font.GothamMedium
+    titleLbl.TextSize = 14
+    titleLbl.TextColor3 = Color3.fromRGB(220, 220, 230)
+    titleLbl.BackgroundTransparency = 1
+    titleLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+    local descLbl = Instance.new("TextLabel", block)
+    descLbl.Position = UDim2.new(0, 16, 0, 28)
+    descLbl.Size = UDim2.new(1, -32, 0, 16)
+    descLbl.Text = desc
+    descLbl.Font = Enum.Font.Gotham
+    descLbl.TextSize = 12
+    descLbl.TextColor3 = Color3.fromRGB(180, 180, 200)
+    descLbl.BackgroundTransparency = 1
+    descLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+    local bar = Instance.new("Frame", block)
+    bar.Position = UDim2.new(0, 16, 0, 60)
+    bar.Size = UDim2.new(1, -32, 0, 6)
+    bar.BackgroundColor3 = Color3.fromRGB(55, 55, 65)
+    Instance.new("UICorner", bar).CornerRadius = UDim.new(0, 6)
+
+    local fill = Instance.new("Frame", bar)
+    fill.BackgroundColor3 = Color3.fromRGB(200, 200, 220)
+    Instance.new("UICorner", fill).CornerRadius = UDim.new(0, 6)
+
+    local norm = (init - minVal) / (maxVal - minVal)
+    fill.Size = UDim2.new(math.clamp(norm, 0, 1), 0, 1, 0)
+
+    local dragging = false
+    local function update(i)
+        local x = math.clamp((i.Position.X - bar.AbsolutePosition.X) / bar.AbsoluteSize.X, 0, 1)
+        fill.Size = UDim2.new(x, 0, 1, 0)
+        onSlide(x)
+    end
+
+    bar.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            update(i)
+        end
+    end)
+    bar.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(i)
+        if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+            update(i)
+        end
+    end)
+end
+
+settingBlock("UI Scale", "Adjust the overall size of the UI.", function(x)
+    uiState.scale = 0.7 + x * 0.8
+    applyUI()
+end, 0, 1, (uiState.scale - 0.7) / 0.8)
+
+local function makeButton(parent, icon, tabName, active)
+    local b = Instance.new("TextButton", parent)
+    b.Size = UDim2.new(0, 42, 0, 42)
+    b.BackgroundTransparency = 1
+    b.Text = ""
+    b.AutoButtonColor = false
+
+    local img = Instance.new("ImageLabel", b)
+    img.Image = "rbxassetid://" .. icon
+    img.Size = active and UDim2.new(1, -6, 1, -6) or UDim2.new(1, -10, 1, -10)
+    img.Position = UDim2.new(0.5, 0, 0.5, 0)
+    img.AnchorPoint = Vector2.new(0.5, 0.5)
+    img.BackgroundTransparency = 1
+    img.ImageColor3 = active and Color3.fromRGB(235, 235, 255) or Color3.fromRGB(150, 150, 165)
+    img.ImageTransparency = active and 0 or 0.25
+
+    b.MouseButton1Click:Connect(function()
+        for _, child in ipairs(parent:GetChildren()) do
+            if child:IsA("TextButton") then
+                local childImg = child:FindFirstChildWhichIsA("ImageLabel")
+                if childImg then
+                    tween(childImg, {Size = UDim2.new(1, -10, 1, -10), ImageTransparency = 0.25, ImageColor3 = Color3.fromRGB(150, 150, 165)})
+                end
             end
-            r6FeedbackActive = false
-        end)
+        end
+        tween(img, {Size = UDim2.new(1, -6, 1, -6), ImageTransparency = 0, ImageColor3 = Color3.fromRGB(235, 235, 255)})
+        for _, t in pairs(tabs) do t.Visible = false end
+        tabs[tabName].Visible = true
+        updateTabLocks()
+    end)
+end
+
+makeButton(topButtons, "116587341745566", "Editor", true)
+makeButton(topButtons, "82207229800032", "Cloud", false)
+makeButton(topButtons, "104682355622970", "Console", false)
+makeButton(topButtons, "7072721038", "Players", false)
+makeButton(bottomButtons, "102594667331649", "Settings", false)
+
+local draggingMain, dragStart, startPos = false, nil, nil
+main.InputBegan:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+        draggingMain = true
+        dragStart = i.Position
+        startPos = main.Position
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(i)
+    if draggingMain and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+        local delta = i.Position - dragStart
+        main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+        draggingMain = false
+    end
+end)
+
+local editorContainer = Instance.new("Frame")
+editorContainer.Name = "PureEditorContainer"
+editorContainer.Parent = tabs.Editor
+editorContainer.AnchorPoint = Vector2.new(0.5, 0.5)
+editorContainer.Position = UDim2.new(0.5, 0, 0.5, 0)
+editorContainer.Size = UDim2.new(1, -40, 1, -40)
+editorContainer.BackgroundColor3 = Color3.fromRGB(22, 22, 28)
+editorContainer.BorderSizePixel = 0
+Instance.new("UICorner", editorContainer).CornerRadius = UDim.new(0, 12)
+
+local scrollFrame = Instance.new("ScrollingFrame", editorContainer)
+scrollFrame.Size = UDim2.new(1, 0, 1, -45)
+scrollFrame.Position = UDim2.new(0, 0, 0, 0)
+scrollFrame.BackgroundTransparency = 1
+scrollFrame.BorderSizePixel = 0
+scrollFrame.ScrollBarThickness = 0
+scrollFrame.ClipsDescendants = true
+scrollFrame.ScrollingDirection = Enum.ScrollingDirection.Y
+
+local linesFrame = Instance.new("Frame", scrollFrame)
+linesFrame.Name = "Lines"
+linesFrame.Position = UDim2.new(0, 0, 0, 0)
+linesFrame.Size = UDim2.new(0, 44, 1, 0)
+linesFrame.BackgroundTransparency = 1
+
+local editBox = Instance.new("TextBox", scrollFrame)
+editBox.Name = "EditBox"
+editBox.Position = UDim2.new(0, 44, 0, 0)
+editBox.Size = UDim2.new(1, -44, 1, 0)
+editBox.BackgroundTransparency = 1
+editBox.BorderSizePixel = 0
+editBox.ClearTextOnFocus = false
+editBox.MultiLine = true
+editBox.TextEditable = true
+editBox.TextWrapped = false
+editBox.TextXAlignment = Enum.TextXAlignment.Left
+editBox.TextYAlignment = Enum.TextYAlignment.Top
+editBox.Font = Enum.Font.Code
+editBox.TextSize = 15
+editBox.TextColor3 = Color3.fromRGB(204, 204, 204)
+editBox.TextTransparency = 1
+editBox.Text = '-- Welcome to Modern Executor\nprint("Ready!")\n'
+
+local highlightContainer = Instance.new("Folder", scrollFrame)
+highlightContainer.Name = "Highlights"
+
+local Syntax = {
+    Text = Color3.fromRGB(204,204,204),
+    Number = Color3.fromRGB(255,198,0),
+    String = Color3.fromRGB(173,241,149),
+    Comment = Color3.fromRGB(102,102,102),
+    Keyword = Color3.fromRGB(248,109,124),
+    BuiltIn = Color3.fromRGB(132,214,247),
+    FunctionName = Color3.fromRGB(253,251,172),
+}
+
+local function colorToHex(c)
+    return string.format("#%02X%02X%02X", math.floor(c.R*255), math.floor(c.G*255), math.floor(c.B*255))
+end
+
+local function getTokenType(tokens, idx)
+    local val, typ = tokens[idx][1], tokens[idx][2]
+    if typ == "Comment" then return "Comment" end
+    if typ == "String" then return "String" end
+    if typ == "Number" then return "Number" end
+    if typ == "Word" then
+        if keywords[val] then return "Keyword" end
+        if builtins[val] then return "BuiltIn" end
+    end
+    return "Text"
+end
+
+local function tokenize(line)
+    local tokens = {}
+    local i = 1
+    while i <= #line do
+        local c = line:sub(i,i)
+        if c == "-" and line:sub(i+1,i+1) == "-" then
+            table.insert(tokens, {line:sub(i), "Comment"})
+            break
+        elseif c == '"' or c == "'" then
+            local quote, start = c, i
+            i = i + 1
+            while i <= #line and not (line:sub(i,i) == quote and line:sub(i-1,i-1) ~= "\\") do i = i + 1 end
+            table.insert(tokens, {line:sub(start, i), "String"})
+        elseif c:match("%d") or (c == "." and line:sub(i+1,i+1):match("%d")) then
+            local start = i
+            while i <= #line and line:sub(i,i):match("[%d%.eE]") do i = i + 1 end
+            table.insert(tokens, {line:sub(start, i-1), "Number"})
+            i = i - 1
+        elseif c:match("[%a_]") then
+            local start = i
+            while i <= #line and line:sub(i,i):match("[%w_]") do i = i + 1 end
+            table.insert(tokens, {line:sub(start, i-1), "Word"})
+            i = i - 1
+        else
+            table.insert(tokens, {c, "Operator"})
+        end
+        i = i + 1
+    end
+    return tokens
+end
+
+local function highlightLine(line)
+    local tokens = tokenize(line)
+    local result = ""
+    for i, token in ipairs(tokens) do
+        local ttype = getTokenType(tokens, i)
+        local color = Syntax[ttype] or Syntax.Text
+        local escaped = token[1]:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")
+        result = result .. string.format('<font color="%s">%s</font>', colorToHex(color), escaped)
+    end
+    return result
+end
+
+local function updateHighlights()
+    pcall(function()
+        highlightContainer:ClearAllChildren()
+        linesFrame:ClearAllChildren()
+
+        local text = editBox.Text or ""
+        local lines = {}
+        local maxLen = 0
+
+        for line in (text.."\n"):gmatch("(.-)\n") do
+            table.insert(lines, line)
+            maxLen = math.max(maxLen, #line)
+        end
+
+        local lineHeight = editBox.TextSize + 6
+        local charWidth = math.floor(editBox.TextSize * 0.58) + 2
+        local y = 0
+
+        for i, line in ipairs(lines) do
+            local code = Instance.new("TextLabel")
+            code.Size = UDim2.new(1, 0, 0, lineHeight)
+            code.Position = UDim2.new(0, 44, 0, y)
+            code.BackgroundTransparency = 1
+            code.RichText = true
+            code.Text = highlightLine(line)
+            code.TextSize = editBox.TextSize
+            code.Font = editBox.Font
+            code.TextXAlignment = Enum.TextXAlignment.Left
+            code.TextYAlignment = Enum.TextYAlignment.Top
+            code.TextColor3 = Color3.fromRGB(220,220,220)
+            code.Parent = highlightContainer
+
+            local num = Instance.new("TextLabel")
+            num.Size = UDim2.new(1, 0, 0, lineHeight)
+            num.Position = UDim2.new(0, 0, 0, y)
+            num.BackgroundTransparency = 1
+            num.Text = tostring(i)
+            num.TextColor3 = Color3.fromRGB(140, 140, 160)
+            num.TextSize = editBox.TextSize - 1
+            num.Font = editBox.Font
+            num.TextXAlignment = Enum.TextXAlignment.Center
+            num.Parent = linesFrame
+
+            y = y + lineHeight
+        end
+
+        local contentW = math.max(800, maxLen * charWidth + 120)
+        local contentH = math.max(400, #lines * lineHeight + 40)
+
+        scrollFrame.CanvasSize = UDim2.new(0, contentW, 0, contentH)
+        editBox.Size = UDim2.new(0, contentW - 44, 0, contentH)
+    end)
+end
+
+editBox:GetPropertyChangedSignal("Text"):Connect(updateHighlights)
+
+local buttonFrame = Instance.new("Frame", editorContainer)
+buttonFrame.Size = UDim2.new(1, -24, 0, 40)
+buttonFrame.Position = UDim2.new(0, 12, 1, -48)
+buttonFrame.BackgroundTransparency = 1
+
+local layoutButtons = Instance.new("UIListLayout", buttonFrame)
+layoutButtons.FillDirection = Enum.FillDirection.Horizontal
+layoutButtons.HorizontalAlignment = Enum.HorizontalAlignment.Left
+layoutButtons.VerticalAlignment = Enum.VerticalAlignment.Center
+layoutButtons.Padding = UDim.new(0, 12)
+
+local statusLabel = Instance.new("TextLabel", buttonFrame)
+statusLabel.Size = UDim2.new(0, 180, 1, 0)
+statusLabel.BackgroundTransparency = 1
+statusLabel.Text = "● Not Connected"
+statusLabel.TextColor3 = Color3.fromRGB(180, 80, 80)
+statusLabel.Font = Enum.Font.GothamSemibold
+statusLabel.TextSize = 15
+statusLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+local function createActionButton(text, callback)
+    local btn = Instance.new("TextButton")
+    btn.Parent = buttonFrame
+    btn.Size = UDim2.new(0, 110, 0, 32)
+    btn.BackgroundTransparency = 1
+    btn.BorderSizePixel = 1
+    btn.BorderColor3 = Color3.fromRGB(70, 70, 85)
+    btn.Text = text
+    btn.Font = Enum.Font.GothamSemibold
+    btn.TextSize = 14
+    btn.TextColor3 = Color3.fromRGB(180, 180, 200)
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 8)
+    corner.Parent = btn
+
+    local originalSize = btn.Size
+    local originalColor = btn.TextColor3
+
+    btn.MouseEnter:Connect(function()
+        tween(btn, {Size = UDim2.new(originalSize.X.Scale, originalSize.X.Offset + 6, originalSize.Y.Scale, originalSize.Y.Offset + 6)})
+        tween(btn, {TextColor3 = Color3.fromRGB(235, 235, 255)})
+    end)
+
+    btn.MouseLeave:Connect(function()
+        tween(btn, {Size = originalSize})
+        tween(btn, {TextColor3 = originalColor})
+    end)
+
+    btn.MouseButton1Down:Connect(function()
+        tween(btn, {Size = UDim2.new(originalSize.X.Scale, originalSize.X.Offset + 10, originalSize.Y.Scale, originalSize.Y.Offset + 10)})
+        tween(btn, {TextColor3 = Color3.fromRGB(255, 255, 255)})
+    end)
+
+    btn.MouseButton1Up:Connect(function()
+        tween(btn, {Size = UDim2.new(originalSize.X.Scale, originalSize.X.Offset + 6, originalSize.Y.Scale, originalSize.Y.Offset + 6)})
+    end)
+
+    btn.MouseButton1Click:Connect(callback)
+end
+
+createActionButton("Execute", function()
+    local code = editBox.Text
+    if code:match("^%s*$") then return end
+
+    if Connected and _G.backdoor and _G.fireRemote then
+        local success, err = pcall(_G.fireRemote, _G.backdoor, code)
+        if success then
+            statusLabel.Text = "● Executed"
+            statusLabel.TextColor3 = Color3.fromRGB(120, 220, 160)
+            task.delay(2, function()
+                statusLabel.Text = "● Connected"
+                statusLabel.TextColor3 = Color3.fromRGB(120, 220, 160)
+            end)
+        else
+            statusLabel.Text = "● Failed"
+            statusLabel.TextColor3 = Color3.fromRGB(180, 80, 80)
+            task.delay(2, function()
+                statusLabel.Text = "● Connected"
+                statusLabel.TextColor3 = Color3.fromRGB(120, 220, 160)
+            end)
+        end
+    else
+        statusLabel.Text = "● Not Connected"
+        statusLabel.TextColor3 = Color3.fromRGB(180, 80, 80)
+    end
+end)
+
+createActionButton("Clear", function()
+    editBox.Text = ""
+    updateHighlights()
+end)
+
+createActionButton("Connect", function()
+    if Injecting then return end
+
+    if Connected then
+        Connected = false
+        _G_backdoor = nil
+        _G_fireRemote = nil
+        statusLabel.Text = "● Not Connected"
+        statusLabel.TextColor3 = Color3.fromRGB(180, 80, 80)
+        updateTabLocks()
         return
     end
-    local username = Players.LocalPlayer.Name
-    local r6Code = 'require(3436957371):r6("' .. username .. '")'
-    _G.fireRemote(_G.backdoor, r6Code)
+
+    Injecting = true
+    statusLabel.Text = "● Connecting..."
+    statusLabel.TextColor3 = Color3.fromRGB(220, 170, 80)
+
+    task.spawn(function()
+        local code = httpGet(Config.ScannerURL)
+        if not code then
+            statusLabel.Text = "● Scanner fetch failed"
+            statusLabel.TextColor3 = Color3.fromRGB(180, 80, 80)
+            Injecting = false
+            return
+        end
+
+        local fn, compileErr = loadstring(code)
+        if not fn then
+            statusLabel.Text = "● Scanner compile failed"
+            statusLabel.TextColor3 = Color3.fromRGB(180, 80, 80)
+            Injecting = false
+            return
+        end
+
+        local ok, runErr = pcall(fn)
+        if not ok then
+            statusLabel.Text = "● Scanner runtime error"
+            statusLabel.TextColor3 = Color3.fromRGB(180, 80, 80)
+            Injecting = false
+            return
+        end
+
+        task.wait(2)
+
+        if _G.backdoor and _G.fireRemote then
+            Connected = true
+            statusLabel.Text = "● Connected"
+            statusLabel.TextColor3 = Color3.fromRGB(120, 220, 160)
+        else
+            statusLabel.Text = "● No backdoor found"
+            statusLabel.TextColor3 = Color3.fromRGB(180, 80, 80)
+        end
+        Injecting = false
+        updateTabLocks()
+    end)
 end)
 
-local RespawnBtn = Instance.new("TextButton")
-RespawnBtn.Parent = LibBottomBar
-RespawnBtn.Position = UDim2.new(0, 76, 0.5, -13)
-RespawnBtn.Size = UDim2.new(0, 80, 0, 26)
-RespawnBtn.Text = "Respawn"
-RespawnBtn.BackgroundColor3 = Color3.fromRGB(100, 50, 50)
-RespawnBtn.TextColor3 = Color3.fromRGB(230, 230, 230)
-RespawnBtn.Font = Enum.Font.GothamBold
-RespawnBtn.TextSize = 13
-local respawnCorner = Instance.new("UICorner", RespawnBtn)
-respawnCorner.CornerRadius = UDim.new(0, 6)
-addStyle(RespawnBtn)
-
-RespawnBtn.MouseButton1Click:Connect(function()
-    local plr = Players.LocalPlayer
-    if plr.Character then plr.Character:BreakJoints() end
-end)
-
-local LibrarySearchBox = Instance.new("TextBox")
-LibrarySearchBox.Parent = LibBottomBar
-LibrarySearchBox.Position = UDim2.new(0, 170, 0.5, -13)
-LibrarySearchBox.Size = UDim2.new(1, -180, 0, 26)
-LibrarySearchBox.PlaceholderText = "Search scripts..."
-LibrarySearchBox.Text = ""
-LibrarySearchBox.BackgroundTransparency = 1
-LibrarySearchBox.TextColor3 = Color3.fromRGB(230, 230, 230)
-LibrarySearchBox.Font = Enum.Font.Gotham
-LibrarySearchBox.TextSize = 14
-LibrarySearchBox.TextXAlignment = Enum.TextXAlignment.Left
-local searchCorner = Instance.new("UICorner", LibrarySearchBox)
-searchCorner.CornerRadius = UDim.new(0, 6)
-local searchPadding = Instance.new("UIPadding", LibrarySearchBox)
-searchPadding.PaddingLeft = UDim.new(0, 10)
-
-local scriptEntries = {}
-
-local function filterLibrary(query)
-    local lowerQuery = string.lower(query)
-    for _, entry in pairs(scriptEntries) do
-        local name = entry.NameLabel.Text
-        local desc = entry.DescLabel.Text or ""
-        local matches = string.find(string.lower(name), lowerQuery, 1, true) or string.find(string.lower(desc), lowerQuery, 1, true)
-        entry.Frame.Visible = (query == "" or matches ~= nil)
+editorContainer.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        editBox:CaptureFocus()
     end
+end)
+
+do
+    local consoleBody = tabs.Console.Body
+    Instance.new("UIListLayout", consoleBody).Padding = UDim.new(0, 4)
+
+    local function addLine(text, color)
+        local lbl = Instance.new("TextLabel")
+        lbl.Size = UDim2.new(1, -10, 0, 22)
+        lbl.BackgroundTransparency = 1
+        lbl.Text = os.date("[%H:%M:%S] ") .. text
+        lbl.TextColor3 = color or Color3.fromRGB(220, 220, 220)
+        lbl.Font = Enum.Font.Code
+        lbl.TextSize = 14
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.TextWrapped = true
+        lbl.Parent = consoleBody
+
+        task.defer(function()
+            consoleBody.CanvasPosition = Vector2.new(0, consoleBody.AbsoluteCanvasSize.Y)
+        end)
+    end
+
+    LogService.MessageOut:Connect(function(msg, typ)
+        local color = Color3.fromRGB(220, 220, 220)
+        local prefix = ""
+        if typ == Enum.MessageType.MessageWarning then
+            prefix = "[WARN] "
+            color = Color3.fromRGB(255, 200, 0)
+        elseif typ == Enum.MessageType.MessageError then
+            prefix = "[ERROR] "
+            color = Color3.fromRGB(255, 80, 80)
+        end
+        addLine(prefix .. msg, color)
+    end)
+
+    addLine("Console ready", Color3.fromRGB(120, 220, 160))
 end
 
-LibrarySearchBox:GetPropertyChangedSignal("Text"):Connect(function()
-    filterLibrary(LibrarySearchBox.Text)
-end)
+do
+    local tab = tabs.Cloud
 
-local function loadLibrary()
-    for _, child in ipairs(LibraryScroll:GetChildren()) do
-        if child:IsA("Frame") then child:Destroy() end
+    local topControl = Instance.new("Frame", tab)
+    topControl.Size = UDim2.new(1, -40, 0, 36)
+    topControl.Position = UDim2.new(0, 20, 0, 20)
+    topControl.BackgroundTransparency = 1
+
+    local topLayout = Instance.new("UIListLayout", topControl)
+    topLayout.FillDirection = Enum.FillDirection.Horizontal
+    topLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+    topLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+    topLayout.Padding = UDim.new(0, 12)
+
+    local function createTopHelper(parent, text, callback)
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(0, 90, 1, 0)
+        btn.BackgroundTransparency = 1
+        btn.BorderSizePixel = 1
+        btn.BorderColor3 = Color3.fromRGB(70, 70, 85)
+        btn.Text = text
+        btn.Font = Enum.Font.GothamSemibold
+        btn.TextSize = 14
+        btn.TextColor3 = Color3.fromRGB(180, 180, 200)
+        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+        btn.Parent = parent
+
+        local origSize = btn.Size
+        local origColor = btn.TextColor3
+
+        btn.MouseEnter:Connect(function()
+            tween(btn, {Size = UDim2.new(origSize.X.Scale, origSize.X.Offset + 6, origSize.Y.Scale, origSize.Y.Offset + 6)})
+            tween(btn, {TextColor3 = Color3.fromRGB(235, 235, 255)})
+        end)
+
+        btn.MouseLeave:Connect(function()
+            tween(btn, {Size = origSize})
+            tween(btn, {TextColor3 = origColor})
+        end)
+
+        btn.MouseButton1Down:Connect(function()
+            tween(btn, {Size = UDim2.new(origSize.X.Scale, origSize.X.Offset + 10, origSize.Y.Scale, origSize.Y.Offset + 10)})
+            tween(btn, {TextColor3 = Color3.fromRGB(255, 255, 255)})
+        end)
+
+        btn.MouseButton1Up:Connect(function()
+            tween(btn, {Size = origSize})
+        end)
+
+        btn.MouseButton1Click:Connect(callback)
     end
-    scriptEntries = {}
-    LibraryStatus.Visible = true
-    LibraryStatus.Text = "Loading library..."
-    task.spawn(function()
-        local success, json = pcall(httpGet, Config.ScriptsURL)
-        if not success or not json then
-            LibraryStatus.Text = "Failed to load library"
-            LibraryStatus.TextColor3 = Color3.fromRGB(180, 80, 80)
-            return
-        end
-        local scripts = HttpService:JSONDecode(json)
-        if type(scripts) ~= "table" then
-            LibraryStatus.Text = "Invalid data"
-            LibraryStatus.TextColor3 = Color3.fromRGB(180, 80, 80)
-            return
-        end
-        LibraryStatus.Visible = false
-        for _, scriptData in ipairs(scripts) do
-            if scriptData.name and scriptData.code then
-                local frame = Instance.new("Frame")
-                frame.Parent = LibraryScroll
-                frame.Size = UDim2.new(1, 0, 0, 70)
-                frame.BackgroundColor3 = Color3.fromRGB(18, 18, 18)
-                local frameCorner = Instance.new("UICorner", frame)
-                frameCorner.CornerRadius = UDim.new(0, 8)
 
-                local title = Instance.new("TextLabel")
-                title.Name = "NameLabel"
-                title.Parent = frame
-                title.Position = UDim2.new(0, 10, 0, 5)
-                title.Size = UDim2.new(1, -20, 0, 20)
+    createTopHelper(topControl, "R6", function()
+        if not Connected or not _G.backdoor or not _G.fireRemote then return end
+        local name = Players.LocalPlayer.Name
+        pcall(_G.fireRemote, _G.backdoor, 'require(3436957371):r6("' .. name .. '")')
+    end)
+
+    createTopHelper(topControl, "Respawn", function()
+        local char = Players.LocalPlayer.Character
+        if char then char:BreakJoints() end
+    end)
+
+    local search = Instance.new("TextBox")
+    search.Size = UDim2.new(1, -220, 1, 0)
+    search.Position = UDim2.new(0, 200, 0, 0)
+    search.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
+    search.PlaceholderText = "Search scripts..."
+    search.Text = ""
+    search.TextColor3 = Color3.fromRGB(220, 220, 230)
+    search.Font = Enum.Font.Gotham
+    search.TextSize = 15
+    Instance.new("UICorner", search).CornerRadius = UDim.new(0, 10)
+    Instance.new("UIPadding", search).PaddingLeft = UDim.new(0, 12)
+    search.Parent = topControl
+
+    local status = Instance.new("TextLabel", tab)
+    status.Size = UDim2.new(0, 180, 0, 30)
+    status.Position = UDim2.new(0, 20, 0, 66)
+    status.BackgroundTransparency = 1
+    status.Text = "Loading library..."
+    status.TextColor3 = Color3.fromRGB(220, 170, 80)
+    status.Font = Enum.Font.Gotham
+    status.TextSize = 16
+
+    local listFrame = Instance.new("ScrollingFrame", cloudScroll)
+    listFrame.Size = UDim2.new(1, 0, 1, 0)
+    listFrame.BackgroundTransparency = 1
+    listFrame.ScrollBarThickness = 6
+    listFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+
+    local listLayout = Instance.new("UIListLayout", listFrame)
+    listLayout.Padding = UDim.new(0, 12)
+    listLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    listLayout.FillDirection = Enum.FillDirection.Vertical
+
+    local entries = {}
+
+    local function loadLibrary()
+        task.spawn(function()
+            local json = httpGet(Config.ScriptsURL)
+            if not json then
+                status.Text = "Failed to load"
+                status.TextColor3 = Color3.fromRGB(180, 80, 80)
+                return
+            end
+
+            local data
+            local s, d = pcall(HttpService.JSONDecode, HttpService, json)
+            if not s then
+                status.Text = "Invalid data"
+                status.TextColor3 = Color3.fromRGB(180, 80, 80)
+                return
+            end
+            data = d
+
+            status.Visible = false
+
+            for _, scriptData in ipairs(data) do
+                if not scriptData.name or not scriptData.code then continue end
+
+                local entry = Instance.new("Frame")
+                entry.Size = UDim2.new(1, 0, 0, 70)
+                entry.BackgroundColor3 = Color3.fromRGB(30, 30, 38)
+                Instance.new("UICorner", entry).CornerRadius = UDim.new(0, 12)
+
+                local title = Instance.new("TextLabel", entry)
+                title.Size = UDim2.new(1, -160, 0, 24)
+                title.Position = UDim2.new(0, 16, 0, 10)
                 title.BackgroundTransparency = 1
                 title.Text = scriptData.name
                 title.TextColor3 = Color3.fromRGB(230, 230, 230)
@@ -608,36 +1172,54 @@ local function loadLibrary()
                 title.TextSize = 16
                 title.TextXAlignment = Enum.TextXAlignment.Left
 
-                local desc = Instance.new("TextLabel")
-                desc.Name = "DescLabel"
-                desc.Parent = frame
-                desc.Position = UDim2.new(0, 10, 0, 28)
-                desc.Size = UDim2.new(1, -20, 0, 16)
+                local desc = Instance.new("TextLabel", entry)
+                desc.Size = UDim2.new(1, -160, 0, 20)
+                desc.Position = UDim2.new(0, 16, 0, 36)
                 desc.BackgroundTransparency = 1
                 desc.Text = scriptData.description or "No description"
-                desc.TextColor3 = Color3.fromRGB(160, 160, 160)
+                desc.TextColor3 = Color3.fromRGB(160, 160, 180)
                 desc.Font = Enum.Font.Gotham
                 desc.TextSize = 13
                 desc.TextXAlignment = Enum.TextXAlignment.Left
 
-                local loadBtn = Instance.new("TextButton")
-                loadBtn.Parent = frame
-                loadBtn.Position = UDim2.new(1, -70, 0.5, -13)
-                loadBtn.Size = UDim2.new(0, 60, 0, 26)
+                local loadBtn = Instance.new("TextButton", entry)
+                loadBtn.Size = UDim2.new(0, 110, 0, 32)
+                loadBtn.Position = UDim2.new(1, -130, 0.5, -16)
+                loadBtn.BackgroundTransparency = 1
+                loadBtn.BorderSizePixel = 1
+                loadBtn.BorderColor3 = Color3.fromRGB(70, 70, 85)
                 loadBtn.Text = "Load"
-                loadBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-                loadBtn.TextColor3 = Color3.fromRGB(230, 230, 230)
-                loadBtn.Font = Enum.Font.GothamBold
-                loadBtn.TextSize = 13
-                local loadCorner = Instance.new("UICorner", loadBtn)
-                loadCorner.CornerRadius = UDim.new(0, 6)
-                addStyle(loadBtn)
+                loadBtn.Font = Enum.Font.GothamSemibold
+                loadBtn.TextSize = 14
+                loadBtn.TextColor3 = Color3.fromRGB(180, 180, 200)
+                Instance.new("UICorner", loadBtn).CornerRadius = UDim.new(0, 8)
+
+                local origSizeLoad = loadBtn.Size
+                local origColorLoad = loadBtn.TextColor3
+
+                loadBtn.MouseEnter:Connect(function()
+                    tween(loadBtn, {Size = UDim2.new(origSizeLoad.X.Scale, origSizeLoad.X.Offset + 6, origSizeLoad.Y.Scale, origSizeLoad.Y.Offset + 6)})
+                    tween(loadBtn, {TextColor3 = Color3.fromRGB(235, 235, 255)})
+                end)
+
+                loadBtn.MouseLeave:Connect(function()
+                    tween(loadBtn, {Size = origSizeLoad})
+                    tween(loadBtn, {TextColor3 = origColorLoad})
+                end)
+
+                loadBtn.MouseButton1Down:Connect(function()
+                    tween(loadBtn, {Size = UDim2.new(origSizeLoad.X.Scale, origSizeLoad.X.Offset + 10, origSizeLoad.Y.Scale, origSizeLoad.Y.Offset + 10)})
+                    tween(loadBtn, {TextColor3 = Color3.fromRGB(255, 255, 255)})
+                end)
+
+                loadBtn.MouseButton1Up:Connect(function()
+                    tween(loadBtn, {Size = UDim2.new(origSizeLoad.X.Scale, origSizeLoad.X.Offset + 6, origSizeLoad.Y.Scale, origSizeLoad.Y.Offset + 6)})
+                end)
 
                 if scriptData.username_placeholder then
-                    local tag = Instance.new("TextLabel")
-                    tag.Parent = frame
-                    tag.Position = UDim2.new(1, -140, 0.5, -8)
-                    tag.Size = UDim2.new(0, 65, 0, 16)
+                    local tag = Instance.new("TextLabel", entry)
+                    tag.Position = UDim2.new(1, -240, 0.5, -8)
+                    tag.Size = UDim2.new(0, 100, 0, 16)
                     tag.BackgroundTransparency = 1
                     tag.Text = "(Auto Username)"
                     tag.TextColor3 = Color3.fromRGB(100, 200, 140)
@@ -648,7 +1230,7 @@ local function loadLibrary()
 
                 loadBtn.MouseButton1Click:Connect(function()
                     local code = scriptData.code or ""
-                    if scriptData.username_placeholder then
+                    if Settings.AutoUsername and scriptData.username_placeholder then
                         local name = Players.LocalPlayer.Name
                         code = code:gsub('"YourUserNameFZ"', '"'..name..'"')
                         code = code:gsub("'YourUserNameFZ'", "'"..name.."'")
@@ -656,192 +1238,37 @@ local function loadLibrary()
                         code = code:gsub('"UsernameHere"', '"'..name..'"')
                         code = code:gsub('"YourUsername"', '"'..name..'"')
                     end
-                    Editor.Text = code
-                    updateLines()
-                    switch(ETab, EXEC_ICON)
+                    editBox.Text = code
+                    updateHighlights()
+                    tabs.Editor.Visible = true
+                    tab.Visible = false
                 end)
 
-                table.insert(scriptEntries, {Frame = frame, NameLabel = title, DescLabel = desc})
+                entry.Parent = listFrame
+                table.insert(entries, {frame = entry, title = title.Text, desc = desc.Text or ""})
             end
-        end
-    end)
-end
-
-CONSOLE_ICON.MouseButton1Click:Connect(function() switch(ConsoleTab, CONSOLE_ICON) end)
-EXEC_ICON.MouseButton1Click:Connect(function() switch(ETab, EXEC_ICON) end)
-CLOUD_ICON.MouseButton1Click:Connect(function()
-    switch(CTab, CLOUD_ICON)
-    loadLibrary()
-end)
-
-local function fail(msg)
-    StatusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
-    StatusLabel.Text = msg
-    Verifying = false
-end
-
-local function success(msg)
-    StatusLabel.TextColor3 = Color3.fromRGB(120, 220, 160)
-    StatusLabel.Text = msg
-    task.wait(0.8)
-
-    LoginTab.Visible = false
-
-    CONSOLE_ICON.Visible = true
-    EXEC_ICON.Visible = true
-    CLOUD_ICON.Visible = true
-    bar.Visible = true
-
-    switch(ConsoleTab, CONSOLE_ICON)
-
-    Verifying = false
-end
-
-local function VerifyKey()
-    if Verifying then return end
-    Verifying = true
-    local enteredKey = tostring(KeyBox.Text or ""):gsub("%s+", "")
-    local playerName = Players.LocalPlayer.Name
-
-    if enteredKey == "" then
-        Verifying = false
-        return fail("Enter a key")
-    end
-
-    local ok, json = pcall(httpGet, Config.WhitelistURL)
-    if not ok or not json then
-        Verifying = false
-        return fail("Failed to fetch whitelist")
-    end
-
-    local decodeOk, data = pcall(HttpService.JSONDecode, HttpService, json)
-    if not decodeOk or type(data) ~= "table" or data[1] == nil then
-        Verifying = false
-        return fail("Invalid whitelist data")
-    end
-
-    for _, entry in ipairs(data) do
-        if type(entry) == "table" then
-            local key = entry["whitelist key"]
-            local activated = entry["whitelist activated"]
-
-            if key and activated == true and tostring(key) == enteredKey then
-                local usernameMatch = false
-                for k, v in pairs(entry) do
-                    if string.find(k, "^username") and type(v) == "string" and v == playerName then
-                        usernameMatch = true
-                        break
-                    end
-                end
-
-                if usernameMatch then
-                    return success("Verified successfully!")
-                end
-            end
-        end
-    end
-
-    Verifying = false
-    fail("Invalid key or username")
-end
-
-VerifyBtn.MouseButton1Click:Connect(VerifyKey)
-KeyBox.FocusLost:Connect(function(enterPressed)
-    if enterPressed then VerifyKey() end
-end)
-
-ClearBtn.MouseButton1Click:Connect(function()
-    Editor.Text = ""
-    updateLines()
-end)
-
-local executeFeedbackActive = false
-ExecuteBtn.MouseButton1Click:Connect(function()
-    local src = Editor.Text:gsub("^%s+", ""):gsub("%s+$", "")
-    if src == "" then return end
-    if not Connected or not _G.backdoor or not _G.fireRemote then
-        if executeFeedbackActive then return end
-        executeFeedbackActive = true
-        local origText = ExecuteBtn.Text
-        ExecuteBtn.Text = "Connect First"
-        task.delay(0.8, function()
-            if ExecuteBtn then ExecuteBtn.Text = origText end
-            executeFeedbackActive = false
         end)
-        return
     end
-    _G.fireRemote(_G.backdoor, src)
-end)
 
-ConnectBtn.MouseButton1Click:Connect(function()
-    if Injecting then return end
-    if Connected then
-        Connected = false
-        ConnectBtn.Text = "Connect"
-        Status.Text = "● Not Connected"
-        Status.TextColor3 = Color3.fromRGB(180, 80, 80)
-        _G.backdoor = nil
-        _G.fireRemote = nil
-        return
-    end
-    Injecting = true
-    Status.Text = "● Scanning for backdoor..."
-    Status.TextColor3 = Color3.fromRGB(220, 170, 80)
-    ConnectBtn.Text = "Cancel"
-    task.spawn(function()
-        local success, code = pcall(httpGet, Config.ScannerURL)
-        if not success then
-            Status.Text = "● Failed to load scanner"
-            Status.TextColor3 = Color3.fromRGB(180, 80, 80)
-            Injecting = false
-            ConnectBtn.Text = "Connect"
-            return
+    search:GetPropertyChangedSignal("Text"):Connect(function()
+        local q = string.lower(search.Text)
+        for _, e in ipairs(entries) do
+            local match = q == "" or string.find(string.lower(e.title), q, 1, true) or string.find(string.lower(e.desc), q, 1, true)
+            e.frame.Visible = match
         end
-        local scannerFn = loadstring(code)
-        if scannerFn then pcall(scannerFn) end
-        for i = 1, 50 do
-            if _G.backdoor then break end
-            task.wait(0.5)
-        end
-        if _G.backdoor then
-            Connected = true
-            Status.Text = "● Connected (Server-Side)"
-            Status.TextColor3 = Color3.fromRGB(120, 220, 160)
-            ConnectBtn.Text = "Disconnect"
-        else
-            Status.Text = "● No backdoor found"
-            Status.TextColor3 = Color3.fromRGB(180, 80, 80)
-            ConnectBtn.Text = "Connect"
-        end
-        Injecting = false
-    end)
-end)
-
-do
-    local dragging = false
-    local dragStart = nil
-    local startPos = nil
-
-    Header.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = true
-            dragStart = input.Position
-            startPos = Menu.Position
-        end
+        task.delay(0.05, function()
+            listFrame.CanvasSize = UDim2.new(0, 0, 0, listLayout.AbsoluteContentSize.Y + 30)
+        end)
     end)
 
-    Header.InputChanged:Connect(function(input)
-        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-            local delta = input.Position - dragStart
-            Menu.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
-        end
-    end)
-
-    UIS.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = false
+    local loaded = false
+    tabs.Cloud:GetPropertyChangedSignal("Visible"):Connect(function()
+        if tabs.Cloud.Visible and not loaded then
+            loaded = true
+            loadLibrary()
         end
     end)
 end
 
-addConsoleLine("Loaded " .. Version .. " " .. Name, Color3.fromRGB(120, 220, 160))
+applyUI()
+task.delay(0.15, updateHighlights)

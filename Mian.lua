@@ -1,6 +1,6 @@
 -- Mian.lua
 
--- Loading screen
+-- Loading screen for Roblox
 local loading = {
     message = "Loading Roblox..."
     progress = 0

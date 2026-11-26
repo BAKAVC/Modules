@@ -1,2 +1,1 @@
-
-nsns
+print("Hello, World!")
